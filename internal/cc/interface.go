@@ -116,6 +116,7 @@ func (api *CCApi) CacheUpdate() error {
 	if api.JobCacheValid && api.JobCacheDate.Add(time.Duration(config.Config.CcPollInterval)*time.Second).After(time.Now()) {
 		return nil
 	}
+	api.JobCacheValid = false
 
 	respJobs, err := api.ccGet("/jobs/?state=running&items-per-page=9999999&page=1&with-metadata=false")
 	if err != nil {
@@ -208,8 +209,7 @@ func (api *CCApi) CacheUpdate() error {
 
 		slurmJobs, err := api.slurmApi.QueryJobs(cluster, jobIdsToQuery)
 		if err != nil {
-			trace.Error("Unable to correct desync. Slurm failed to query jobs (%s, %v): %v", cluster, jobIdsToQuery, err)
-			continue
+			return fmt.Errorf("Unable to correct desync. Slurm failed to query jobs (%s, %v): %w", cluster, jobIdsToQuery, err)
 		}
 
 		for _, slurmJob := range slurmJobs {
@@ -220,7 +220,7 @@ func (api *CCApi) CacheUpdate() error {
 
 		err = api.SyncJobs(cluster, slurmJobs, true)
 		if err != nil {
-			trace.Error("Unable to correct desync (state may be inconsistent now!). Sync to cc-backend failed: %v", err)
+			return fmt.Errorf("Unable to correct desync. Sync to cc-backend failed: %w", err)
 		}
 	}
 
@@ -248,20 +248,26 @@ func (api *CCApi) CacheUpdate() error {
 
 		slurmJobs, err := api.slurmApi.QueryJobs(cluster, jobIdsToQuery)
 		if err != nil {
-			trace.Error("Unable to correct desync. Slurm failed to query jobs (%s, %v): %v", cluster, jobIdsToQuery, err)
-			continue
+			return fmt.Errorf("Unable to correct desync. Slurm failed to query jobs (%s, %v): %w", cluster, jobIdsToQuery, err)
 		}
 
+		previousStates := make(map[int64]*CacheJobState)
 		for _, slurmJob := range slurmJobs {
-			cacheJob := ccJobClusterCache[slurmJob.GetJobId()]
-
-			cacheJob.CacheEvictAge = 0
-			cacheJob.Running = false
+			jobID := slurmJob.GetJobId()
+			previousStates[jobID] = ccJobClusterCache[jobID]
+			// The backend no longer lists this locally running job. Let SyncJobs
+			// issue start_job again rather than treating the old entry as proof.
+			delete(ccJobClusterCache, jobID)
 		}
 
 		err = api.SyncJobs(cluster, slurmJobs, true)
 		if err != nil {
-			trace.Error("Unable to correct desync (state may be inconsistent now!). Sync to cc-backend failed: %v", err)
+			for jobID, previous := range previousStates {
+				if _, exists := ccJobClusterCache[jobID]; !exists && previous != nil {
+					ccJobClusterCache[jobID] = previous
+				}
+			}
+			return fmt.Errorf("Unable to correct desync. Sync to cc-backend failed: %w", err)
 		}
 	}
 
