@@ -116,6 +116,7 @@ func (api *CCApi) CacheUpdate() error {
 	if api.JobCacheValid && api.JobCacheDate.Add(time.Duration(config.Config.CcPollInterval)*time.Second).After(time.Now()) {
 		return nil
 	}
+	api.JobCacheValid = false
 
 	respJobs, err := api.ccGet("/jobs/?state=running&items-per-page=9999999&page=1&with-metadata=false")
 	if err != nil {
@@ -125,7 +126,8 @@ func (api *CCApi) CacheUpdate() error {
 
 	defer respJobs.Body.Close()
 	body, err := io.ReadAll(respJobs.Body)
-	if err != err {
+	if err != nil {
+		api.JobCacheValid = false
 		return fmt.Errorf("Unable to GET running jobs from cc-backend: %w", err)
 	}
 
@@ -207,8 +209,7 @@ func (api *CCApi) CacheUpdate() error {
 
 		slurmJobs, err := api.slurmApi.QueryJobs(cluster, jobIdsToQuery)
 		if err != nil {
-			trace.Error("Unable to correct desync. Slurm failed to query jobs (%s, %v): %v", cluster, jobIdsToQuery, err)
-			continue
+			return fmt.Errorf("Unable to correct desync. Slurm failed to query jobs (%s, %v): %w", cluster, jobIdsToQuery, err)
 		}
 
 		for _, slurmJob := range slurmJobs {
@@ -219,7 +220,7 @@ func (api *CCApi) CacheUpdate() error {
 
 		err = api.SyncJobs(cluster, slurmJobs, true)
 		if err != nil {
-			trace.Error("Unable to correct desync (state may be inconsistent now!). Sync to cc-backend failed: %v", err)
+			return fmt.Errorf("Unable to correct desync. Sync to cc-backend failed: %w", err)
 		}
 	}
 
@@ -247,20 +248,26 @@ func (api *CCApi) CacheUpdate() error {
 
 		slurmJobs, err := api.slurmApi.QueryJobs(cluster, jobIdsToQuery)
 		if err != nil {
-			trace.Error("Unable to correct desync. Slurm failed to query jobs (%s, %v): %v", cluster, jobIdsToQuery, err)
-			continue
+			return fmt.Errorf("Unable to correct desync. Slurm failed to query jobs (%s, %v): %w", cluster, jobIdsToQuery, err)
 		}
 
+		previousStates := make(map[int64]*CacheJobState)
 		for _, slurmJob := range slurmJobs {
-			cacheJob := ccJobClusterCache[slurmJob.GetJobId()]
-
-			cacheJob.CacheEvictAge = 0
-			cacheJob.Running = false
+			jobID := slurmJob.GetJobId()
+			previousStates[jobID] = ccJobClusterCache[jobID]
+			// The backend no longer lists this locally running job. Let SyncJobs
+			// issue start_job again rather than treating the old entry as proof.
+			delete(ccJobClusterCache, jobID)
 		}
 
 		err = api.SyncJobs(cluster, slurmJobs, true)
 		if err != nil {
-			trace.Error("Unable to correct desync (state may be inconsistent now!). Sync to cc-backend failed: %v", err)
+			for jobID, previous := range previousStates {
+				if _, exists := ccJobClusterCache[jobID]; !exists && previous != nil {
+					ccJobClusterCache[jobID] = previous
+				}
+			}
+			return fmt.Errorf("Unable to correct desync. Sync to cc-backend failed: %w", err)
 		}
 	}
 
@@ -457,6 +464,7 @@ func (api *CCApi) CCStopJob(job slurm_common.Job) error {
 	jobId := job.GetJobId()
 
 	cachedJobState, jobKnown := api.JobCache[cluster][jobId]
+	cachedRunning := jobKnown && cachedJobState.Running
 	if jobKnown && !cachedJobState.Running {
 		return nil
 	}
@@ -499,13 +507,13 @@ func (api *CCApi) CCStopJob(job slurm_common.Job) error {
 		}
 
 		if respStop.StatusCode != 200 && respStop.StatusCode != 422 {
-			return fmt.Errorf("Calling /jobs/stop_job/ (cluster=%s jobid=%d known=%v running=%v) failed with HTTP %d: Body %s", cluster, jobId, jobKnown, cachedJobState.Running, respStop.StatusCode, string(body))
+			return fmt.Errorf("Calling /jobs/stop_job/ (cluster=%s jobid=%d known=%v running=%v) failed with HTTP %d: Body %s", cluster, jobId, jobKnown, cachedRunning, respStop.StatusCode, string(body))
 		}
 
 		if respStop.StatusCode == 422 {
 			// While it should usually not occur a 422 (i.e. job was already stopped),
 			// this may still occur if something in the state was glitched.
-			trace.Warn("Calling /jobs/stop_job/ (cluster=%s jobid=%d known=%v cachedRunningState=%v) failed with HTTP 422 (non-fatal): Body %s", cluster, jobId, jobKnown, cachedJobState.Running, string(body))
+			trace.Warn("Calling /jobs/stop_job/ (cluster=%s jobid=%d known=%v cachedRunningState=%v) failed with HTTP 422 (non-fatal): Body %s", cluster, jobId, jobKnown, cachedRunning, string(body))
 		}
 	}
 
