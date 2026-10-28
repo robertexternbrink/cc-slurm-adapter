@@ -940,7 +940,7 @@ func (j *Job) GetResources() ([]*schema.Resource, error) {
 		// If Resources is nil, then the job probably just hasn't started yet.
 		// we can safely return an empty list, since this job will be discarded
 		// later either way.
-		trace.Debug("Job (%s, %d) has scontrol info available, but no resources", *j.sa.Cluster, *j.sa.JobId)
+		trace.Debug("Job (%s, %d) has scontrol info available, but no resources", j.GetCluster(), j.GetJobId())
 		return make([]*schema.Resource, 0), nil
 	}
 
@@ -1007,7 +1007,7 @@ func (j *Job) GetResources() ([]*schema.Resource, error) {
 						if match {
 							for _, v := range nodeGres.DomainIndices {
 								if v >= len(hostSettings.GpuPciAddrs) {
-									trace.Error("Unable to determine PCI address: Detected GPU in job %d, which is not listed in config file (gresIndex=%d >= len(gpus)=%d)", *j.sa.JobId, v, len(hostSettings.GpuPciAddrs))
+									trace.Error("Unable to determine PCI address: Detected GPU in job %d, which is not listed in config file (gresIndex=%d >= len(gpus)=%d)", j.GetJobId(), v, len(hostSettings.GpuPciAddrs))
 									continue
 								}
 								trace.Debug("Found GPU %d for %s: %s", v, host, hostSettings.GpuPciAddrs[v])
@@ -1019,7 +1019,7 @@ func (j *Job) GetResources() ([]*schema.Resource, error) {
 					}
 				}
 				if !found {
-					trace.Warn("Unable to find GPU list for hostname=%s from GRES for job %d", host, *j.sa.JobId)
+					trace.Warn("Unable to find GPU list for hostname=%s from GRES for job %d", host, j.GetJobId())
 				}
 			}
 		} else if *j.sc.Comment != "" {
