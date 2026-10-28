@@ -329,18 +329,7 @@ func processSlurmSacctPoll() error {
 		lastRun = thisRun.Add(time.Duration(-config.Config.SlurmQueryMaxSpan) * time.Second)
 	}
 
-	// Detect time change (e.g. summer/winter time). If ...
-	_, beginOffset := lastRun.Zone()
-	_, endOffset := thisRun.Zone()
-	if endOffset < beginOffset {
-		// If the time has gone backwards, move the begin time stamp backwards accordingly.
-		// This way we make sure we pass a correct local time to Slurm, where 'begin'
-		// is actually always before 'end'.
-		// I am not entirely sure that this works reliably or if Go will correctly
-		// handle those changes.
-		trace.Warn("Time change detected: Moving last run %d seconds backwards", endOffset-beginOffset)
-		lastRun = lastRun.Add(-time.Duration(endOffset-beginOffset) * time.Second)
-	}
+	lastRun = sacctQueryStart(lastRun, thisRun)
 
 	haveJobs := false
 	for _, cluster := range slurmApi.GetClusterNames() {
@@ -361,6 +350,21 @@ func processSlurmSacctPoll() error {
 		lastRunSet(thisRun)
 	}
 	return nil
+}
+
+func sacctQueryStart(lastRun, thisRun time.Time) time.Time {
+	// Detect time change (e.g. summer/winter time). If ...
+	_, beginOffset := lastRun.Zone()
+	_, endOffset := thisRun.Zone()
+	if endOffset < beginOffset {
+		// If the time has gone backwards, move the begin time stamp backwards accordingly.
+		// This way we make sure we pass a correct local time to Slurm, where 'begin'
+		// is actually always before 'end'.
+		trace.Warn("Time change detected: Moving last run %d seconds backwards", beginOffset-endOffset)
+		lastRun = lastRun.Add(time.Duration(endOffset-beginOffset) * time.Second)
+	}
+
+	return lastRun
 }
 
 func processSlurmSqueuePoll() error {
