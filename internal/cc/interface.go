@@ -125,7 +125,8 @@ func (api *CCApi) CacheUpdate() error {
 
 	defer respJobs.Body.Close()
 	body, err := io.ReadAll(respJobs.Body)
-	if err != err {
+	if err != nil {
+		api.JobCacheValid = false
 		return fmt.Errorf("Unable to GET running jobs from cc-backend: %w", err)
 	}
 
