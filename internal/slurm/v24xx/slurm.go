@@ -653,18 +653,18 @@ func (api *slurmApi) QueryNodeStats(cluster string) ([]types.CCNodeStat, error) 
 			node.Hostname = hostname
 			// For some reason the CPU core counts are aggregated over the number of nodes
 			node.CpusAllocated = *stat.Cpus.Allocated / len(stat.Nodes.Nodes)
-			//node.CpusTotal = *stat.Cpus.Total / len(stat.Nodes.Nodes)
+			// node.CpusTotal = *stat.Cpus.Total / len(stat.Nodes.Nodes)
 			// Memory is not aggragated
 			node.MemoryAllocated = *stat.Memory.Allocated
-			//node.MemoryTotal = *stat.Memory.Maximum
+			// node.MemoryTotal = *stat.Memory.Maximum
 			// Neither is GRES
 			gresAlloc, errAlloc := ParseGRES(*stat.Gres.Used)
 			_, errTotal := ParseGRES(*stat.Gres.Total)
 			if errTotal == nil && errAlloc == nil {
-				//node.GpusTotal = int(gresTotal.Count)
+				// node.GpusTotal = int(gresTotal.Count)
 				node.GpusAllocated = int(gresAlloc.Count)
 			} else {
-				//node.GpusTotal = 0
+				// node.GpusTotal = 0
 				node.GpusAllocated = 0
 			}
 
@@ -698,49 +698,45 @@ func ParseGRES(gres string) (*GRES, error) {
 		return nil, err
 	}
 
+	indices := rangeStringToInts(gresParsed[5])
+	if indices == nil {
+		return nil, fmt.Errorf("Unable to parse GRES index range: %q", gresParsed[5])
+	}
+
 	return &GRES{
 		Variant:       gresParsed[1],
 		Id:            gresParsed[2],
 		Count:         count,
 		DomainType:    gresParsed[4],
-		DomainIndices: rangeStringToInts(gresParsed[5]),
+		DomainIndices: indices,
 	}, nil
 }
 
 func rangeStringToInts(rangeString string) []int {
-	// commaList: ["0-2", "5"]
 	result := make([]int, 0)
-	commaList := strings.Split(rangeString, ",")
-	for _, subRange := range commaList {
-		subRangeElements := strings.Split(subRange, "-")
-		if len(subRangeElements) == 1 {
-			i, err := strconv.Atoi(subRangeElements[0])
-			if err != nil {
-				continue
+	for _, part := range strings.Split(rangeString, ",") {
+		bounds := strings.Split(part, "-")
+		if len(bounds) < 1 || len(bounds) > 2 {
+			return nil
+		}
+		first, err := strconv.Atoi(bounds[0])
+		if err != nil || first < 0 {
+			return nil
+		}
+		last := first
+		if len(bounds) == 2 {
+			last, err = strconv.Atoi(bounds[1])
+			if err != nil || last < first {
+				return nil
 			}
-			result = append(result, i)
-			continue
 		}
-
-		if len(subRangeElements) != 2 {
-			continue
-		}
-
-		first, err := strconv.Atoi(subRangeElements[0])
-		if err != nil {
-			continue
-		}
-
-		last, err := strconv.Atoi(subRangeElements[1])
-		if err != nil {
-			continue
-		}
-
-		for i := first; i <= last; i++ {
-			result = append(result, i)
+		for value := first; ; value++ {
+			result = append(result, value)
+			if value == last {
+				break
+			}
 		}
 	}
-
 	return result
 }
 
@@ -944,7 +940,7 @@ func (j *Job) GetResources() ([]*schema.Resource, error) {
 		// If Resources is nil, then the job probably just hasn't started yet.
 		// we can safely return an empty list, since this job will be discarded
 		// later either way.
-		trace.Debug("Job (%s, %d) has scontrol info available, but no resources", *j.sa.Cluster, *j.sa.JobId)
+		trace.Debug("Job (%s, %d) has scontrol info available, but no resources", j.GetCluster(), j.GetJobId())
 		return make([]*schema.Resource, 0), nil
 	}
 
@@ -1011,7 +1007,7 @@ func (j *Job) GetResources() ([]*schema.Resource, error) {
 						if match {
 							for _, v := range nodeGres.DomainIndices {
 								if v >= len(hostSettings.GpuPciAddrs) {
-									trace.Error("Unable to determine PCI address: Detected GPU in job %d, which is not listed in config file (gresIndex=%d >= len(gpus)=%d)", *j.sa.JobId, v, len(hostSettings.GpuPciAddrs))
+									trace.Error("Unable to determine PCI address: Detected GPU in job %d, which is not listed in config file (gresIndex=%d >= len(gpus)=%d)", j.GetJobId(), v, len(hostSettings.GpuPciAddrs))
 									continue
 								}
 								trace.Debug("Found GPU %d for %s: %s", v, host, hostSettings.GpuPciAddrs[v])
@@ -1023,7 +1019,7 @@ func (j *Job) GetResources() ([]*schema.Resource, error) {
 					}
 				}
 				if !found {
-					trace.Warn("Unable to find GPU list for hostname=%s from GRES for job %d", host, *j.sa.JobId)
+					trace.Warn("Unable to find GPU list for hostname=%s from GRES for job %d", host, j.GetJobId())
 				}
 			}
 		} else if *j.sc.Comment != "" {
