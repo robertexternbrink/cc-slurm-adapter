@@ -2,6 +2,7 @@ package prep
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -33,27 +34,28 @@ func ServerInit(ctx context.Context, prepEventChan chan []byte) error {
 	if sockType == "unix" {
 		err = os.Chmod(sockAddr, 0666)
 		if err != nil {
+			prepSocket.Close()
 			return fmt.Errorf("Failed to set permissions via chmod on PrEp Socket: %w", err)
 		}
 	}
 
-	go prepSocketListenRoutine(ctx, prepEventChan)
+	go prepSocketListenRoutine(ctx, prepEventChan, prepSocket)
 	return nil
 }
 
 func ServerQuit() {
-	os.Remove(config.Config.PidFilePath)
-	sockType, sockAddr := config.GetProtoAddr(config.Config.PrepSockListenPath)
-	if sockType == "unix" {
-		os.Remove(sockAddr)
+	if prepSocket != nil {
+		prepSocket.Close()
 	}
-	prepSocket.Close()
 }
 
-func prepSocketListenRoutine(ctx context.Context, chn chan<- []byte) {
+func prepSocketListenRoutine(ctx context.Context, chn chan<- []byte, listener net.Listener) {
 	for {
-		conn, err := prepSocket.Accept()
+		conn, err := listener.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
 			select {
 			case <-ctx.Done():
 				trace.Debug("Cancelling PrEp accept loop")
