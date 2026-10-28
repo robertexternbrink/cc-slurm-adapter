@@ -372,7 +372,11 @@ func (v *SlurmString) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 
-	*v = SlurmString(data)
+	var text string
+	if err := json.Unmarshal(data, &text); err != nil {
+		return fmt.Errorf("Unable to parse Slurm string or string array: %w", err)
+	}
+	*v = SlurmString(text)
 	return nil
 }
 
