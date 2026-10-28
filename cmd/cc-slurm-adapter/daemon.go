@@ -342,6 +342,7 @@ func processSlurmSacctPoll() error {
 		lastRun = lastRun.Add(-time.Duration(endOffset-beginOffset) * time.Second)
 	}
 
+	haveJobs := false
 	for _, cluster := range slurmApi.GetClusterNames() {
 		jobs, err := slurmApi.QueryJobsTimeRange(cluster, lastRun, thisRun)
 		if err != nil {
@@ -353,12 +354,12 @@ func processSlurmSacctPoll() error {
 			return fmt.Errorf("Syncing job (%s, %v) to ClusterCockpit failed (%s). Trying later...", cluster, jobIdsOfJobs(jobs), err)
 		}
 
-		if len(jobs) > 0 {
-			// Avoid unecessary time stamp file writes if no jobs were actually submitted since the last check
-			lastRunSet(thisRun)
-		}
+		haveJobs = haveJobs || len(jobs) > 0
 	}
 
+	if haveJobs {
+		lastRunSet(thisRun)
+	}
 	return nil
 }
 
