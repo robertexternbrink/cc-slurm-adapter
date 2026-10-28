@@ -2,8 +2,11 @@ package cc
 
 import (
 	"errors"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/ClusterCockpit/cc-slurm-adapter/internal/config"
 	slurm_common "github.com/ClusterCockpit/cc-slurm-adapter/internal/slurm/common"
@@ -55,3 +58,37 @@ func TestCacheUpdateRejectsReadErrorAfterValidJSON(t *testing.T) {
 	}
 }
 
+type fixtureJob struct{ slurm_common.Job }
+
+func (fixtureJob) GetCluster() string    { return "example" }
+func (fixtureJob) GetJobId() int64       { return 123 }
+func (fixtureJob) GetState() string      { return "COMPLETED" }
+func (fixtureJob) GetEndTime() time.Time { return time.Unix(100, 0) }
+
+func TestStopUnknownJobHTTPResponses(t *testing.T) {
+	old := config.Config
+	t.Cleanup(func() { config.Config = old })
+	config.Config.CcRestUrl = "http://fixture.invalid"
+	config.Config.CcRestSubmitJobs = true
+	for _, status := range []int{500, 422, 200} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			api := CCApi{JobCache: map[string]map[int64]*CacheJobState{"example": {}}, httpClient: http.Client{Transport: fixtureTransport(func(req *http.Request) (*http.Response, error) {
+				if req.URL.Host != "fixture.invalid" || req.Method != "POST" || req.URL.Path != "/api/jobs/stop_job/" {
+					t.Fatalf("unexpected request: %s %s", req.Method, req.URL)
+				}
+				return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader("synthetic response"))}, nil
+			})}}
+			err := api.CCStopJob(fixtureJob{})
+			if status == 500 {
+				if err == nil {
+					t.Fatal("HTTP failure accepted")
+				}
+				if _, exists := api.JobCache["example"][123]; exists {
+					t.Fatal("failed stop changed cache")
+				}
+			} else if err != nil || api.JobCache["example"][123] == nil || api.JobCache["example"][123].Running {
+				t.Fatalf("successful/idempotent stop failed: %v", err)
+			}
+		})
+	}
+}

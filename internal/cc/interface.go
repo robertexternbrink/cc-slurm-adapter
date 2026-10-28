@@ -458,6 +458,7 @@ func (api *CCApi) CCStopJob(job slurm_common.Job) error {
 	jobId := job.GetJobId()
 
 	cachedJobState, jobKnown := api.JobCache[cluster][jobId]
+	cachedRunning := jobKnown && cachedJobState.Running
 	if jobKnown && !cachedJobState.Running {
 		return nil
 	}
@@ -500,13 +501,13 @@ func (api *CCApi) CCStopJob(job slurm_common.Job) error {
 		}
 
 		if respStop.StatusCode != 200 && respStop.StatusCode != 422 {
-			return fmt.Errorf("Calling /jobs/stop_job/ (cluster=%s jobid=%d known=%v running=%v) failed with HTTP %d: Body %s", cluster, jobId, jobKnown, cachedJobState.Running, respStop.StatusCode, string(body))
+			return fmt.Errorf("Calling /jobs/stop_job/ (cluster=%s jobid=%d known=%v running=%v) failed with HTTP %d: Body %s", cluster, jobId, jobKnown, cachedRunning, respStop.StatusCode, string(body))
 		}
 
 		if respStop.StatusCode == 422 {
 			// While it should usually not occur a 422 (i.e. job was already stopped),
 			// this may still occur if something in the state was glitched.
-			trace.Warn("Calling /jobs/stop_job/ (cluster=%s jobid=%d known=%v cachedRunningState=%v) failed with HTTP 422 (non-fatal): Body %s", cluster, jobId, jobKnown, cachedJobState.Running, string(body))
+			trace.Warn("Calling /jobs/stop_job/ (cluster=%s jobid=%d known=%v cachedRunningState=%v) failed with HTTP 422 (non-fatal): Body %s", cluster, jobId, jobKnown, cachedRunning, string(body))
 		}
 	}
 
