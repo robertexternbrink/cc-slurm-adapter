@@ -372,7 +372,11 @@ func (v *SlurmString) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 
-	*v = SlurmString(data)
+	var text string
+	if err := json.Unmarshal(data, &text); err != nil {
+		return fmt.Errorf("Unable to parse Slurm string or string array: %w", err)
+	}
+	*v = SlurmString(text)
 	return nil
 }
 
@@ -653,18 +657,18 @@ func (api *slurmApi) QueryNodeStats(cluster string) ([]types.CCNodeStat, error) 
 			node.Hostname = hostname
 			// For some reason the CPU core counts are aggregated over the number of nodes
 			node.CpusAllocated = *stat.Cpus.Allocated / len(stat.Nodes.Nodes)
-			//node.CpusTotal = *stat.Cpus.Total / len(stat.Nodes.Nodes)
+			// node.CpusTotal = *stat.Cpus.Total / len(stat.Nodes.Nodes)
 			// Memory is not aggragated
 			node.MemoryAllocated = *stat.Memory.Allocated
-			//node.MemoryTotal = *stat.Memory.Maximum
+			// node.MemoryTotal = *stat.Memory.Maximum
 			// Neither is GRES
 			gresAlloc, errAlloc := ParseGRES(*stat.Gres.Used)
 			_, errTotal := ParseGRES(*stat.Gres.Total)
 			if errTotal == nil && errAlloc == nil {
-				//node.GpusTotal = int(gresTotal.Count)
+				// node.GpusTotal = int(gresTotal.Count)
 				node.GpusAllocated = int(gresAlloc.Count)
 			} else {
-				//node.GpusTotal = 0
+				// node.GpusTotal = 0
 				node.GpusAllocated = 0
 			}
 
