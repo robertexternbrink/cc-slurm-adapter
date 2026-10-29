@@ -36,17 +36,18 @@ func DaemonMain() error {
 	// Init Signal Handling
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(signalChan)
 	signalCtx, signalCancel := context.WithCancel(context.Background())
+	defer signalCancel()
 
 	// start background routine that handles the Unix Socket
 	prepEventChan := make(chan []byte, 1024)
 
 	err := daemonInit(signalCtx, prepEventChan)
-	defer daemonQuit()
 	if err != nil {
-		signalCancel()
 		return fmt.Errorf("Unable to initialize Daemon: %w", err)
 	}
+	defer daemonQuit()
 
 	queryDelay := time.Duration(config.Config.SlurmQueryDelay) * time.Second
 
@@ -155,11 +156,19 @@ func DaemonMain() error {
 	}
 }
 
-func daemonInit(ctx context.Context, prepEventChan chan []byte) error {
-	var err error
-
-	// Assert last_run is writable. That way crash immediately instead after a long delay.
-	lastRunSet(lastRunGet())
+func daemonInit(ctx context.Context, prepEventChan chan []byte) (err error) {
+	pidCreated, serverStarted := false, false
+	defer func() {
+		if err == nil {
+			return
+		}
+		if serverStarted {
+			prep.ServerQuit()
+		}
+		if pidCreated {
+			os.Remove(config.Config.PidFilePath)
+		}
+	}()
 
 	// Init Unix Socket
 	trace.Debug("Opening Socket")
@@ -182,12 +191,17 @@ func daemonInit(ctx context.Context, prepEventChan chan []byte) error {
 	if err != nil {
 		return fmt.Errorf("Unable to create pid file: %w", err)
 	}
+	pidCreated = true
+
+	// Check the checkpoint only after this instance owns its PID file.
+	lastRunSet(lastRunGet())
 
 	// Init PrEp server
 	err = prep.ServerInit(ctx, prepEventChan)
 	if err != nil {
 		return err
 	}
+	serverStarted = true
 
 	// Init Slurm interface
 	slurmApi, err = slurm.NewSlurmApi()
@@ -200,6 +214,11 @@ func daemonInit(ctx context.Context, prepEventChan chan []byte) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err != nil {
+			ccApi.Close()
+		}
+	}()
 
 	// job events queue initialization
 	jobEvents = make([]prep.SlurmctldEnv, 0)
@@ -223,11 +242,10 @@ func daemonQuit() {
 	// actually is the daemon...
 	trace.Debug("Closing Socket")
 	prep.ServerQuit()
-	sockType, sockAddr := config.GetProtoAddr(config.Config.PrepSockListenPath)
-	if sockType == "unix" {
-		os.Remove(sockAddr)
-	}
 	os.Remove(config.Config.PidFilePath)
+	if ccApi != nil {
+		ccApi.Close()
+	}
 }
 
 func printWelcome() {
